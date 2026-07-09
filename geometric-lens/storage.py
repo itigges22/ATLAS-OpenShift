@@ -209,7 +209,13 @@ class ProjectStore:
         deleted = 0
 
         for project_id in os.listdir(self.base_path):
-            meta = self.get_metadata(project_id)
+            try:
+                meta = self.get_metadata(project_id)
+            except ValueError:
+                # PVC roots commonly contain filesystem-created entries
+                # such as lost+found. They are not project directories and
+                # should not prevent service startup cleanup from running.
+                continue
             if meta:
                 expires = datetime.fromisoformat(meta.expires_at)
                 if now > expires:

@@ -14,6 +14,11 @@ set +a
 : "${ATLAS_MODEL_FILE:?set ATLAS_MODEL_FILE}"
 : "${ATLAS_MODEL_URL:?set ATLAS_MODEL_URL}"
 : "${ATLAS_KUEUE_QUEUE:=unreserved}"
+: "${ATLAS_GPU_NODE_SELECTOR_KEY:?set ATLAS_GPU_NODE_SELECTOR_KEY}"
+: "${ATLAS_GPU_NODE_SELECTOR_VALUE:?set ATLAS_GPU_NODE_SELECTOR_VALUE}"
+: "${ATLAS_GPU_TOLERATION_KEY:?set ATLAS_GPU_TOLERATION_KEY}"
+: "${ATLAS_GPU_TOLERATION_VALUE:?set ATLAS_GPU_TOLERATION_VALUE}"
+: "${ATLAS_GPU_TOLERATION_EFFECT:=NoSchedule}"
 
 POD="atlas-model-downloader"
 
@@ -30,6 +35,13 @@ metadata:
     kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
 spec:
   restartPolicy: Never
+  nodeSelector:
+    ${ATLAS_GPU_NODE_SELECTOR_KEY}: "${ATLAS_GPU_NODE_SELECTOR_VALUE}"
+  tolerations:
+  - key: "${ATLAS_GPU_TOLERATION_KEY}"
+    operator: Equal
+    value: "${ATLAS_GPU_TOLERATION_VALUE}"
+    effect: "${ATLAS_GPU_TOLERATION_EFFECT}"
   containers:
   - name: downloader
     image: docker.io/library/alpine:3.20

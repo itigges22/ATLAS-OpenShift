@@ -20,6 +20,13 @@ spec:
         app.kubernetes.io/part-of: atlas-openshift
         kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
     spec:
+      nodeSelector:
+        ${ATLAS_GPU_NODE_SELECTOR_KEY}: "${ATLAS_GPU_NODE_SELECTOR_VALUE}"
+      tolerations:
+      - key: "${ATLAS_GPU_TOLERATION_KEY}"
+        operator: Equal
+        value: "${ATLAS_GPU_TOLERATION_VALUE}"
+        effect: "${ATLAS_GPU_TOLERATION_EFFECT}"
       containers:
       - name: llama
         image: image-registry.openshift-image-registry.svc:5000/${ATLAS_NAMESPACE}/${ATLAS_LLAMA_IMAGE}:${ATLAS_LLAMA_IMAGE_TAG}
@@ -104,7 +111,6 @@ spec:
       labels:
         app.kubernetes.io/name: atlas-geometric-lens
         app.kubernetes.io/part-of: atlas-openshift
-        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
     spec:
       containers:
       - name: lens
@@ -117,11 +123,11 @@ spec:
         - {name: LLAMA_EMBED_URL, value: "http://atlas-llama-server:8080"}
         - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
         - {name: GEOMETRIC_LENS_ENABLED, value: "true"}
-        - {name: PROJECT_DATA_DIR, value: "/data/projects"}
+        - {name: PROJECT_DATA_DIR, value: "/data/project-store/projects"}
         - {name: SQLITE_DB_PATH, value: "/data/state/geometric_state.db"}
         - {name: HOME, value: "/tmp"}
         volumeMounts:
-        - {name: projects, mountPath: /data/projects}
+        - {name: projects, mountPath: /data/project-store}
         - {name: state, mountPath: /data/state}
         - {name: tmp, mountPath: /tmp}
         readinessProbe:
@@ -183,7 +189,6 @@ spec:
       labels:
         app.kubernetes.io/name: atlas-sandbox
         app.kubernetes.io/part-of: atlas-openshift
-        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
     spec:
       containers:
       - name: sandbox
@@ -270,7 +275,6 @@ spec:
       labels:
         app.kubernetes.io/name: atlas-v3-service
         app.kubernetes.io/part-of: atlas-openshift
-        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
     spec:
       containers:
       - name: v3
@@ -340,7 +344,6 @@ spec:
       labels:
         app.kubernetes.io/name: atlas-proxy
         app.kubernetes.io/part-of: atlas-openshift
-        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
     spec:
       containers:
       - name: proxy
@@ -364,7 +367,6 @@ spec:
         - {name: HOME, value: "/tmp"}
         volumeMounts:
         - {name: workspace, mountPath: /workspace}
-        - {name: models, mountPath: /models, readOnly: true}
         - {name: lens-training, mountPath: /data/lens_training}
         - {name: tmp, mountPath: /tmp}
         readinessProbe:
@@ -387,8 +389,6 @@ spec:
       volumes:
       - name: workspace
         persistentVolumeClaim: {claimName: atlas-workspace}
-      - name: models
-        persistentVolumeClaim: {claimName: ${ATLAS_MODEL_PVC}}
       - name: lens-training
         persistentVolumeClaim: {claimName: atlas-lens-training}
       - name: tmp

@@ -13,6 +13,9 @@ baseline-vs-routed benchmark pairs against the cluster.
 - NVIDIA GPU Operator/device-plugin support is already installed cluster-wide.
   The llama pod requests `nvidia.com/gpu: 1`.
 - The selected GGUF model files live in a PVC mounted at `/models`.
+- The model PVC must bind in a storage topology reachable from the H200 nodes.
+  The included downloader pod uses the configured GPU node selector/toleration
+  so a new `WaitForFirstConsumer` PVC binds on the right side of the cluster.
 
 ## 1. Configure
 
@@ -28,6 +31,8 @@ Important fields:
 - `ATLAS_MODEL_FILE`: the GGUF filename to load.
 - `ATLAS_MAIN_MODEL`: display/model name; usually same as the filename.
 - `ATLAS_CUDA_ARCH=90`: Hopper/H100/H200 build target.
+- `ATLAS_GPU_NODE_SELECTOR_*` and `ATLAS_GPU_TOLERATION_*`: the H200 placement
+  hints used by llama-server and the model downloader.
 
 The default env creates a dedicated `atlas-models` PVC sized by
 `ATLAS_MODELS_STORAGE`. If you want to reuse an existing PVC instead, set
@@ -75,6 +80,10 @@ This creates:
 - `atlas-v3-service` — product V3 HTTP service.
 - `atlas-sandbox` — code execution sandbox.
 - `atlas-proxy` — agent/proxy entrypoint plus an OpenShift Route.
+
+Only `atlas-llama-server` is Kueue/GPU-bound. The CPU services intentionally do
+not carry the Kueue queue label, which avoids pinning PVC-backed CPU pods to the
+H200 storage topology.
 
 Wait until everything is ready:
 
