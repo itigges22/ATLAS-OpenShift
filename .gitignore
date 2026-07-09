@@ -9,6 +9,7 @@ atlas.conf
 *.local
 # Compose dev-mode override (local copy of docker-compose.override.yml.example)
 docker-compose.override.yml
+deploy/openshift/openshift.env
 
 # ----- Development Task Files -----
 TASK*.md

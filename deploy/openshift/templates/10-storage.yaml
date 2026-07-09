@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${ATLAS_MODEL_PVC}
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_MODELS_STORAGE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-workspace
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_WORKSPACE_STORAGE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-lens-projects
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_LENS_PROJECTS_STORAGE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-lens-state
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_LENS_STATE_STORAGE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-lens-training
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_LENS_TRAINING_STORAGE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-results
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${ATLAS_RESULTS_STORAGE}

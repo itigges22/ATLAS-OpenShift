@@ -30,7 +30,7 @@ FROM ${BUILDER_IMAGE} AS builder
 #   80,86 = Ampere (A100, RTX 30xx)
 #   87    = Orin/Jetson AGX
 #   89    = Ada Lovelace (RTX 40xx, L4)
-#   90    = Hopper (H100)
+#   90    = Hopper (H100/H200)
 #   100,120,121 = Blackwell (B100, RTX 50xx, DGX Spark GB10)
 # Multiple archs can be passed semicolon-separated, e.g. "86;89;90".
 ARG CUDA_ARCH=120;121

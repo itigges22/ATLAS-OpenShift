@@ -1,0 +1,40 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ${ATLAS_LLAMA_IMAGE}
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-llama-hopper
+    app.kubernetes.io/part-of: atlas-openshift
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ${ATLAS_LLAMA_IMAGE}
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-llama-hopper
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  runPolicy: Serial
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile.v31
+      buildArgs:
+      - name: CUDA_ARCH
+        value: "${ATLAS_CUDA_ARCH}"
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ${ATLAS_LLAMA_IMAGE}:${ATLAS_LLAMA_IMAGE_TAG}
+  resources:
+    requests:
+      cpu: "4"
+      memory: 8Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi

@@ -1,0 +1,429 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-llama-server
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-llama-server
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlas-llama-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlas-llama-server
+        app.kubernetes.io/part-of: atlas-openshift
+        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
+    spec:
+      containers:
+      - name: llama
+        image: image-registry.openshift-image-registry.svc:5000/${ATLAS_NAMESPACE}/${ATLAS_LLAMA_IMAGE}:${ATLAS_LLAMA_IMAGE_TAG}
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - {name: ATLAS_BACKEND, value: "cuda"}
+        - {name: MODEL_PATH, value: "/models/${ATLAS_MODEL_FILE}"}
+        - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
+        - {name: PORT, value: "8080"}
+        - {name: CONTEXT_LENGTH, value: "${ATLAS_CONTEXT_LENGTH}"}
+        - {name: PARALLEL_SLOTS, value: "${ATLAS_PARALLEL_SLOTS}"}
+        - {name: KV_CACHE_TYPE_K, value: "${ATLAS_KV_TYPE_K}"}
+        - {name: KV_CACHE_TYPE_V, value: "${ATLAS_KV_TYPE_V}"}
+        - {name: BATCH_SIZE, value: "${ATLAS_BATCH}"}
+        - {name: UBATCH_SIZE, value: "${ATLAS_UBATCH}"}
+        - {name: SLOT_SAVE_PATH, value: "/tmp/slots"}
+        volumeMounts:
+        - {name: models, mountPath: /models, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+        readinessProbe:
+          httpGet: {path: /health, port: 8080}
+          initialDelaySeconds: 120
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 20
+        livenessProbe:
+          httpGet: {path: /health, port: 8080}
+          initialDelaySeconds: 240
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 10
+        resources:
+          requests:
+            cpu: ${ATLAS_LLAMA_CPU_REQUEST}
+            memory: ${ATLAS_LLAMA_MEMORY_REQUEST}
+            nvidia.com/gpu: 1
+          limits:
+            cpu: ${ATLAS_LLAMA_CPU_LIMIT}
+            memory: ${ATLAS_LLAMA_MEMORY_LIMIT}
+            nvidia.com/gpu: 1
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: ${ATLAS_MODEL_PVC}
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-llama-server
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-llama-server
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  selector:
+    app.kubernetes.io/name: atlas-llama-server
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-geometric-lens
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-geometric-lens
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlas-geometric-lens
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlas-geometric-lens
+        app.kubernetes.io/part-of: atlas-openshift
+        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
+    spec:
+      containers:
+      - name: lens
+        image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-lens:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - {name: http, containerPort: 8099}
+        env:
+        - {name: LLAMA_URL, value: "http://atlas-llama-server:8080"}
+        - {name: LLAMA_EMBED_URL, value: "http://atlas-llama-server:8080"}
+        - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
+        - {name: GEOMETRIC_LENS_ENABLED, value: "true"}
+        - {name: PROJECT_DATA_DIR, value: "/data/projects"}
+        - {name: SQLITE_DB_PATH, value: "/data/state/geometric_state.db"}
+        - {name: HOME, value: "/tmp"}
+        volumeMounts:
+        - {name: projects, mountPath: /data/projects}
+        - {name: state, mountPath: /data/state}
+        - {name: tmp, mountPath: /tmp}
+        readinessProbe:
+          httpGet: {path: /ready, port: 8099}
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+        livenessProbe:
+          httpGet: {path: /health, port: 8099}
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: projects
+        persistentVolumeClaim: {claimName: atlas-lens-projects}
+      - name: state
+        persistentVolumeClaim: {claimName: atlas-lens-state}
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-geometric-lens
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-geometric-lens
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  selector:
+    app.kubernetes.io/name: atlas-geometric-lens
+  ports:
+  - name: http
+    port: 8099
+    targetPort: 8099
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-sandbox
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-sandbox
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlas-sandbox
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlas-sandbox
+        app.kubernetes.io/part-of: atlas-openshift
+        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
+    spec:
+      containers:
+      - name: sandbox
+        image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-sandbox:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - {name: http, containerPort: 8020}
+        env:
+        - {name: HOME, value: "/home/sandbox"}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+        volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: tmp, mountPath: /tmp}
+        - {name: home, mountPath: /home/sandbox}
+        - {name: pylocal, mountPath: /home/sandbox/.local}
+        - {name: cache, mountPath: /home/sandbox/.cache}
+        - {name: npm, mountPath: /home/sandbox/.npm}
+        - {name: cargo, mountPath: /home/sandbox/.cargo}
+        - {name: go, mountPath: /home/sandbox/go}
+        - {name: m2, mountPath: /home/sandbox/.m2}
+        - {name: gradle, mountPath: /home/sandbox/.gradle}
+        readinessProbe:
+          httpGet: {path: /health, port: 8020}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /health, port: 8020}
+          initialDelaySeconds: 20
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: workspace
+        persistentVolumeClaim: {claimName: atlas-workspace}
+      - {name: tmp, emptyDir: {sizeLimit: 1Gi}}
+      - {name: home, emptyDir: {sizeLimit: 512Mi}}
+      - {name: pylocal, emptyDir: {sizeLimit: 512Mi}}
+      - {name: cache, emptyDir: {sizeLimit: 512Mi}}
+      - {name: npm, emptyDir: {sizeLimit: 512Mi}}
+      - {name: cargo, emptyDir: {sizeLimit: 1Gi}}
+      - {name: go, emptyDir: {sizeLimit: 1Gi}}
+      - {name: m2, emptyDir: {sizeLimit: 1Gi}}
+      - {name: gradle, emptyDir: {sizeLimit: 1Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-sandbox
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-sandbox
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  selector:
+    app.kubernetes.io/name: atlas-sandbox
+  ports:
+  - name: http
+    port: 8020
+    targetPort: 8020
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-v3-service
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-v3-service
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlas-v3-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlas-v3-service
+        app.kubernetes.io/part-of: atlas-openshift
+        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
+    spec:
+      containers:
+      - name: v3
+        image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-v3:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - {name: http, containerPort: 8070}
+        env:
+        - {name: ATLAS_V3_PORT, value: "8070"}
+        - {name: ATLAS_INFERENCE_URL, value: "http://atlas-llama-server:8080"}
+        - {name: ATLAS_LENS_URL, value: "http://atlas-geometric-lens:8099"}
+        - {name: ATLAS_SANDBOX_URL, value: "http://atlas-sandbox:8020"}
+        - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
+        - {name: HOME, value: "/tmp"}
+        volumeMounts:
+        - {name: tmp, mountPath: /tmp}
+        readinessProbe:
+          httpGet: {path: /health, port: 8070}
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /health, port: 8070}
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-v3-service
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-v3-service
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  selector:
+    app.kubernetes.io/name: atlas-v3-service
+  ports:
+  - name: http
+    port: 8070
+    targetPort: 8070
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-proxy
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-proxy
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlas-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlas-proxy
+        app.kubernetes.io/part-of: atlas-openshift
+        kueue.x-k8s.io/queue-name: ${ATLAS_KUEUE_QUEUE}
+    spec:
+      containers:
+      - name: proxy
+        image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-proxy:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: IfNotPresent
+        workingDir: /workspace
+        ports:
+        - {name: http, containerPort: 8090}
+        env:
+        - {name: ATLAS_PROXY_PORT, value: "8090"}
+        - {name: ATLAS_INFERENCE_URL, value: "http://atlas-llama-server:8080"}
+        - {name: ATLAS_LLAMA_URL, value: "http://atlas-llama-server:8080"}
+        - {name: ATLAS_LENS_URL, value: "http://atlas-geometric-lens:8099"}
+        - {name: ATLAS_SANDBOX_URL, value: "http://atlas-sandbox:8020"}
+        - {name: ATLAS_V3_URL, value: "http://atlas-v3-service:8070"}
+        - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
+        - {name: ATLAS_CTX_SIZE, value: "${ATLAS_CONTEXT_LENGTH}"}
+        - {name: ATLAS_PARALLEL_SLOTS, value: "${ATLAS_PARALLEL_SLOTS}"}
+        - {name: ATLAS_VERIFY_IN, value: "sandbox"}
+        - {name: ATLAS_WORKSPACE_DIR, value: "/workspace"}
+        - {name: HOME, value: "/tmp"}
+        volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: models, mountPath: /models, readOnly: true}
+        - {name: lens-training, mountPath: /data/lens_training}
+        - {name: tmp, mountPath: /tmp}
+        readinessProbe:
+          httpGet: {path: /health, port: 8090}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+        livenessProbe:
+          httpGet: {path: /health, port: 8090}
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: workspace
+        persistentVolumeClaim: {claimName: atlas-workspace}
+      - name: models
+        persistentVolumeClaim: {claimName: ${ATLAS_MODEL_PVC}}
+      - name: lens-training
+        persistentVolumeClaim: {claimName: atlas-lens-training}
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-proxy
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-proxy
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  selector:
+    app.kubernetes.io/name: atlas-proxy
+  ports:
+  - name: http
+    port: 8090
+    targetPort: 8090
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: atlas-proxy
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-proxy
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  to:
+    kind: Service
+    name: atlas-proxy
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

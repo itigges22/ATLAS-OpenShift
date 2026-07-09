@@ -11,7 +11,7 @@ The install steps depend on your hardware + OS. Find the row that matches your s
 | Your hardware | OS | Recommended path | Support level ([matrix](../SUPPORT_MATRIX.md)) |
 |---|---|---|---|
 | NVIDIA RTX 50-series / Blackwell (B100, GB10) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) or [Method 1: Docker](#method-1-docker-compose-recommended) | Supported — published CUDA image targets Blackwell |
-| NVIDIA RTX 20/30/40, GTX 10xx, datacenter (V100/A100/H100/T4/L4) | Linux | [Method 1: Docker](#method-1-docker-compose-recommended) + one-time [local rebuild](#cuda-compute-capability-dockerfilev31) | Preview — local rebuild required |
+| NVIDIA RTX 20/30/40, GTX 10xx, datacenter (V100/A100/H100/H200/T4/L4) | Linux | [Method 1: Docker](#method-1-docker-compose-recommended) + one-time [local rebuild](#cuda-compute-capability-dockerfilev31) | Preview — local rebuild required |
 | NVIDIA GPU | Windows (WSL2) | [Method 1: Docker — NVIDIA section](#method-1-docker-compose-recommended) | Unsupported — untested, no claims made; reports welcome |
 | AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) | Community-tested ([GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
 | **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](SETUP_MACOS.md)** (dedicated guide — hybrid native Metal + Docker) | Supported (maintainer-verified, M2 Pro) |
@@ -33,7 +33,7 @@ Don't see your setup? File an issue with `uname -a` output and `lspci | grep -i 
 
 Single curl command that detects your distro, installs Docker + nvidia-container-toolkit, downloads model weights, and brings the stack up. Idempotent — safe to re-run.
 
-> **NVIDIA pre-Blackwell GPUs (RTX 20/30/40-series, GTX 10xx, V100/A100/T4/L4/H100): read this first.**
+> **NVIDIA pre-Blackwell GPUs (RTX 20/30/40-series, GTX 10xx, V100/A100/T4/L4/H100/H200): read this first.**
 > The published `atlas-llama` CUDA image is compiled for compute capability
 > `120;121` (Blackwell — RTX 50xx, B100, GB10) **only**. On older NVIDIA GPUs
 > llama-server will fail at startup with
@@ -728,7 +728,7 @@ which tier your hardware lands in and the exact `.env` values to use.
 | **small** | 8–12 GB | Qwen3.5 7B Q4_K_M (4.4 GB) | 8K | 1 | RTX 3060/4060 8GB, T4 |
 | **medium** | 12–20 GB | Qwen3.5 9B Q6_K (6.9 GB) | 32K | 1 | RTX 4060/5060 Ti 16GB, 3080 Ti, 4070 Ti Super |
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
-| **xlarge** | 32 GB+ | Qwen3.5 32B Q5_K_M (23 GB) | 64K | 2 | RTX 5090 32GB, A6000, A100, H100 |
+| **xlarge** | 32 GB+ | Qwen3.5 32B Q5_K_M (23 GB) | 64K | 2 | RTX 5090 32GB, A6000, A100, H100/H200 |
 
 ```bash
 atlas tier              # classify this host + show recommendations
@@ -770,7 +770,7 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 | Vendor | Backend | Status | Build path | Tested cards |
 |---|---|---|---|---|
 | NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
-| NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
+| NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/H200/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | H200 via OpenShift benchmark lane |
 | AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
 | Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
 | Any (cross-vendor fallback) | Vulkan | Preview | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) smoke-tested; no real-GPU validation yet |
@@ -780,7 +780,7 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, B100, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
+`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, B100, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/H200/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
 
 Find your GPU's arch, then rebuild with `--build-arg CUDA_ARCH=<value>`:
 
@@ -809,7 +809,7 @@ Common values:
 | `75` | Turing | RTX 20xx, T4 |
 | `80`, `86` | Ampere | A100, RTX 30xx |
 | `89` | Ada Lovelace | RTX 40xx, L4 |
-| `90` | Hopper | H100 |
+| `90` | Hopper | H100, H200 |
 | `100`, `120`, `121` | Blackwell | B100, RTX 50xx |
 
 #### AMD GPU Targets (Dockerfile.rocm)

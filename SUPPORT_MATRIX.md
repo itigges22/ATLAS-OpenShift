@@ -41,7 +41,7 @@ Supported row cites its validation.
 | Backend | Level | Tested device | Validation |
 |---|---|---|---|
 | CUDA (NVIDIA, Blackwell — RTX 50xx / B100 / GB10) | Supported | RTX 5060 Ti 16GB | Primary dev hardware; release smoke tests. Published image is compiled for compute capability 12.0/12.1 only |
-| CUDA (NVIDIA, pre-Blackwell — RTX 20xx–40xx, GTX 10xx, T4/L4/V100/A100/H100) | Preview (local rebuild required) | — | Published image fails with `no kernel image`; rebuild with `--build-arg CUDA_ARCH=<cc>` per SETUP.md. Upstream llama.cpp supports these; no maintainer validation on ATLAS |
+| CUDA (NVIDIA, pre-Blackwell — RTX 20xx–40xx, GTX 10xx, T4/L4/V100/A100/H100/H200) | Preview (local rebuild required) | H200 via OpenShift benchmark lane | Published image fails with `no kernel image`; rebuild with `--build-arg CUDA_ARCH=<cc>` per SETUP.md. Hopper/H100/H200 use `CUDA_ARCH=90`. Upstream llama.cpp supports these; product release validation remains Blackwell-focused |
 | ROCm (AMD, x86_64) | Community-tested | RX 7900 XTX | [GH #26](https://github.com/itigges22/ATLAS/issues/26) |
 | Metal (Apple Silicon hybrid) | Supported | M2 Pro 32GB | Maintainer-verified; native llama-server + Docker services |
 | Vulkan (universal) | Preview | lavapipe (CPU ICD) boot path | Smoke-tested; the designated fallback for Intel/others |
