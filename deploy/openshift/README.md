@@ -107,7 +107,7 @@ In one terminal:
 In another terminal:
 
 ```bash
-./scripts/openshift/run-benchmark-pair.sh qwen9b-smoke 10
+ATLAS_BENCH_MAX_TOKENS=256 ./scripts/openshift/run-benchmark-pair.sh qwen9b-smoke 10
 ```
 
 That runs:
@@ -116,7 +116,9 @@ That runs:
 2. Routed: `python -m benchmark.v3_runner --selection-strategy lens`.
 
 Both use the same cluster llama/lens endpoints via `LLAMA_URL` and
-`RAG_API_URL`.
+`RAG_API_URL`. Leave `ATLAS_BENCH_MAX_TOKENS` unset for full benchmark runs;
+set it for smoke tests so a single task does not consume the full 8192-token
+generation budget.
 
 ## 5. Run the Qwen/Gemma matrix
 

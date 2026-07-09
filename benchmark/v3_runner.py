@@ -97,8 +97,9 @@ from benchmark.v3.embedding_store import EmbeddingWriter
 RAG_API_URL = config.rag_url
 LLAMA_URL = config.llama_url
 # Published Qwen3.5 benchmarks use: temp=0.6, top_k=20, top_p=0.95,
-# max_tokens=32768+, thinking mode enabled. Match their settings.
-MAX_TOKENS = 8192
+# max_tokens=32768+, thinking mode enabled. Keep the default generous for
+# real runs, while allowing smoke jobs to cap generation without editing code.
+MAX_TOKENS = int(os.environ.get("ATLAS_BENCH_MAX_TOKENS", "8192"))
 BASE_TEMPERATURE = 0.6  # Qwen3.5 recommended for coding with thinking
 DIVERSITY_TEMPERATURE = 0.8  # Slightly higher for candidate diversity
 
@@ -264,6 +265,7 @@ class LLMAdapter:
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
         self.call_count += 1
+        max_tokens = min(max_tokens, MAX_TOKENS)
 
         # `prompt` may be a ChatML string (from phase modules) or raw text;
         # chatml_to_messages() normalizes it so the model's own template applies.
@@ -1723,6 +1725,9 @@ def main():
                         help="Smoke test (10 tasks only)")
     parser.add_argument("--max-tasks", type=int, default=None,
                         help="Limit number of tasks")
+    parser.add_argument("--max-tokens", type=int, default=None,
+                        help=("Cap tokens per LLM call. Defaults to "
+                              "ATLAS_BENCH_MAX_TOKENS or 8192."))
     parser.add_argument("--no-phase1", action="store_true",
                         help="Disable Phase 1 features")
     parser.add_argument("--no-phase2", action="store_true",
@@ -1737,6 +1742,10 @@ def main():
     parser.add_argument("--enable-feedback", action="store_true",
                         help="Enable Lens Evolution (Phase 4): online C(x) retrain during benchmark")
     args = parser.parse_args()
+
+    if args.max_tokens is not None:
+        global MAX_TOKENS
+        MAX_TOKENS = args.max_tokens
 
     if args.baseline:
         args.no_phase1 = True
