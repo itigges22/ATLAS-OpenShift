@@ -118,7 +118,10 @@ That runs:
 Both use the same cluster llama/lens endpoints via `LLAMA_URL` and
 `RAG_API_URL`. Leave `ATLAS_BENCH_MAX_TOKENS` unset for full benchmark runs;
 set it for smoke tests so a single task does not consume the full 8192-token
-generation budget.
+generation budget. When `ATLAS_BENCH_MAX_TOKENS` is set, the OpenShift helper
+also allows an existing partial LiveCodeBench cache for smoke runs; unset
+`ATLAS_LCB_ALLOW_PARTIAL_CACHE` or set it to `0` when you want a full dataset
+refresh before a real run.
 
 ## 5. Run the Qwen/Gemma matrix
 

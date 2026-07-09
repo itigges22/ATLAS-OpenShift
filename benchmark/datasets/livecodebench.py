@@ -120,6 +120,12 @@ class LiveCodeBenchDataset(BaseDataset):
         if filepath.exists():
             if not partial_marker.exists():
                 return filepath
+            if os.environ.get("ATLAS_LCB_ALLOW_PARTIAL_CACHE", "").lower() in (
+                "1", "true", "yes"
+            ):
+                print(f"Using partial LiveCodeBench cache at {filepath} "
+                      f"because ATLAS_LCB_ALLOW_PARTIAL_CACHE=1.")
+                return filepath
             print(f"Cached LiveCodeBench copy at {filepath} is a partial "
                   f"download — retrying the full fetch...")
 
