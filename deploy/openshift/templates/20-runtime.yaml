@@ -351,6 +351,13 @@ spec:
         app.kubernetes.io/name: atlas-proxy
         app.kubernetes.io/part-of: atlas-openshift
     spec:
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: atlas-sandbox
+            topologyKey: kubernetes.io/hostname
       containers:
       - name: proxy
         image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-proxy:${ATLAS_IMAGE_TAG}
