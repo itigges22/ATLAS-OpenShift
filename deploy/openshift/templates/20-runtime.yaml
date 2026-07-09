@@ -103,6 +103,8 @@ metadata:
     app.kubernetes.io/part-of: atlas-openshift
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: atlas-geometric-lens
@@ -181,6 +183,8 @@ metadata:
     app.kubernetes.io/part-of: atlas-openshift
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: atlas-sandbox
@@ -336,6 +340,8 @@ metadata:
     app.kubernetes.io/part-of: atlas-openshift
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: atlas-proxy
