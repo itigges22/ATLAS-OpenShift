@@ -96,6 +96,30 @@ oc rollout status deploy/atlas-sandbox
 oc rollout status deploy/atlas-proxy
 ```
 
+## 3b. Provide Lens artifacts for the deployed model
+
+`atlas-geometric-lens` stays NotReady (`/ready` 503) until model-coupled
+artifacts (`cost_field.pt`, G(x) bundle, `model_identity.json`) exist at
+`/app/geometric_lens/models`. The published `atlas-lens` image ships no
+artifacts; the runtime template mounts the `atlas-lens-state` PVC's
+`lens-models/` subpath at that location, so artifacts survive image updates
+and pod restarts.
+
+To populate them, either copy an existing bundle for the deployed model:
+
+```bash
+oc rsync <local-artifact-dir>/ <lens-pod>:/data/state/lens-models/
+oc rollout restart deploy/atlas-geometric-lens
+```
+
+or train fresh ones against the in-cluster llama-server (the lens image has
+torch + xgboost; add scikit-learn with `pip install --user scikit-learn`).
+The identity check is name- and dim-strict: `model_identity.json` must match
+the served model (`/v1/models` id, e.g. `Qwen3.5-9B-Q6_K.gguf`) and the
+embedding dim llama-server emits. The Qwen3.5-9B bundle here was trained on
+the pre-computed 4096-dim labeled embeddings from
+`huggingface.co/datasets/itigges22/ATLAS` (`embeddings/training_embeddings_4096d.json`).
+
 ## 4. Run a smoke benchmark pair
 
 In one terminal:
@@ -122,6 +146,27 @@ generation budget. When `ATLAS_BENCH_MAX_TOKENS` is set, the OpenShift helper
 also allows an existing partial LiveCodeBench cache for smoke runs; unset
 `ATLAS_LCB_ALLOW_PARTIAL_CACHE` or set it to `0` when you want a full dataset
 refresh before a real run.
+
+## 4b. Run the benchmark pair from inside the cluster
+
+Long generation calls (e.g. the routed run's LLM self-test phase) are
+unreliable through `oc port-forward`. `30-bench.yaml` deploys an idle
+`atlas-bench` pod on the cluster network for exec-driven runs:
+
+```bash
+BENCH_POD=$(oc get pod -l app.kubernetes.io/name=atlas-bench -o name | head -1)
+oc exec ${BENCH_POD#pod/} -- mkdir -p /bench/ATLAS
+oc rsync --exclude=results --exclude=__pycache__ benchmark ${BENCH_POD#pod/}:/bench/ATLAS/
+oc exec ${BENCH_POD#pod/} -- sh -c 'cd /bench/ATLAS && PYTHONPATH=/bench/ATLAS \
+  ATLAS_BENCH_MAX_TOKENS=256 ATLAS_LCB_ALLOW_PARTIAL_CACHE=1 \
+  python -m benchmark.v3_runner --run-id qwen9b-smoke_baseline_<stamp> --baseline --max-tasks 3 --max-tokens 256'
+# then the routed run: --selection-strategy lens instead of --baseline
+oc rsync ${BENCH_POD#pod/}:/bench/ATLAS/benchmark/results/ benchmark/results/
+```
+
+`LLAMA_URL` and `RAG_API_URL` are already set in the pod to the in-cluster
+services. Results land on the `atlas-results` PVC (`/bench`), so they survive
+pod restarts; rsync them back when the run finishes.
 
 ## 5. Run the Qwen/Gemma matrix
 

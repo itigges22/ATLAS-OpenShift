@@ -131,6 +131,10 @@ spec:
         volumeMounts:
         - {name: projects, mountPath: /data/project-store}
         - {name: state, mountPath: /data/state}
+        # Lens artifacts are model-coupled and trained per-deployment
+        # (`atlas lens build`), so they live on the state PVC instead of
+        # the image. service.py only looks in /app/geometric_lens/models.
+        - {name: state, mountPath: /app/geometric_lens/models, subPath: lens-models}
         - {name: tmp, mountPath: /tmp}
         readinessProbe:
           httpGet: {path: /ready, port: 8099}

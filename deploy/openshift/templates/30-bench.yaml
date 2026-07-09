@@ -1,0 +1,51 @@
+# In-cluster benchmark runner. Long-running exec target instead of a Job so
+# the repo's benchmark/ tree (with local changes) can be rsynced in and
+# baseline/routed pairs driven interactively without pod churn. Runs on the
+# cluster network, which avoids the local port-forward flakiness that long
+# generation calls hit.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-bench
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-bench
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: atlas-bench
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: atlas-bench
+        app.kubernetes.io/part-of: atlas-openshift
+    spec:
+      containers:
+      - name: bench
+        image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-v3:${ATLAS_IMAGE_TAG}
+        imagePullPolicy: IfNotPresent
+        command: ["sleep", "infinity"]
+        env:
+        - {name: LLAMA_URL, value: "http://atlas-llama-server:8080"}
+        - {name: RAG_API_URL, value: "http://atlas-geometric-lens:8099"}
+        - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
+        - {name: HOME, value: "/tmp"}
+        volumeMounts:
+        - {name: bench, mountPath: /bench}
+        - {name: tmp, mountPath: /tmp}
+        resources:
+          requests:
+            cpu: ${ATLAS_SERVICE_CPU_REQUEST}
+            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+          limits:
+            cpu: ${ATLAS_SERVICE_CPU_LIMIT}
+            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+      volumes:
+      - name: bench
+        persistentVolumeClaim: {claimName: atlas-results}
+      - name: tmp
+        emptyDir: {}
