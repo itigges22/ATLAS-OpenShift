@@ -27,6 +27,8 @@ spec:
       buildArgs:
       - name: CUDA_ARCH
         value: "${ATLAS_CUDA_ARCH}"
+      - name: GGML_NATIVE
+        value: "OFF"
   output:
     to:
       kind: ImageStreamTag

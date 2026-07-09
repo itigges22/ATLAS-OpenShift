@@ -34,6 +34,10 @@ FROM ${BUILDER_IMAGE} AS builder
 #   100,120,121 = Blackwell (B100, RTX 50xx, DGX Spark GB10)
 # Multiple archs can be passed semicolon-separated, e.g. "86;89;90".
 ARG CUDA_ARCH=120;121
+# Native CPU tuning is useful for single-host local builds, but cluster builds
+# may run on a different CPU generation than the eventual GPU node/runtime.
+# Set GGML_NATIVE=OFF for portable OpenShift/Kubernetes images.
+ARG GGML_NATIVE=ON
 # Install build deps. Default rockylinux9 uses dnf; ubuntu/l4t variants
 # use apt. Try dnf first, fall back to apt-get so the same Dockerfile
 # works across base-image overrides (#115). ccache is added so the
@@ -114,6 +118,7 @@ RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
     cd /llama.cpp && \
     cmake -B build \
         -DGGML_CUDA=ON \
+        -DGGML_NATIVE="${GGML_NATIVE}" \
         -DBUILD_SHARED_LIBS=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \

@@ -56,8 +56,11 @@ SHA-256. For Gemma, set `ATLAS_MODEL_URL`, `ATLAS_MODEL_FILE`, and
 ```
 
 This creates an OpenShift `BuildConfig` and builds `inference/Dockerfile.v31`
-from the local `inference/` directory with `CUDA_ARCH=90`. The resulting image
-is pushed to the namespace ImageStream configured by `ATLAS_LLAMA_IMAGE`.
+from the local `inference/` directory with `CUDA_ARCH=90` and
+`GGML_NATIVE=OFF`. Disabling native CPU tuning keeps the image portable across
+OpenShift build/runtime nodes while the CUDA kernels remain Hopper-targeted. The
+resulting image is pushed to the namespace ImageStream configured by
+`ATLAS_LLAMA_IMAGE`.
 
 ## 3. Deploy ATLAS services
 

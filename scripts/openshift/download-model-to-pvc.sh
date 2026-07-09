@@ -37,7 +37,7 @@ spec:
     - /bin/sh
     - -lc
     - |
-      set -euo pipefail
+      set -eu
       cd /models
       echo "Target: ${ATLAS_MODEL_FILE}"
       if [ -s "${ATLAS_MODEL_FILE}" ]; then
@@ -63,6 +63,18 @@ spec:
 YAML
 
 oc wait -n "$ATLAS_NAMESPACE" --for=condition=PodScheduled "pod/${POD}" --timeout=5m
-oc logs -n "$ATLAS_NAMESPACE" -f "pod/${POD}"
+
+for _ in $(seq 1 120); do
+  if oc logs -n "$ATLAS_NAMESPACE" -f "pod/${POD}"; then
+    break
+  fi
+  phase="$(oc get pod -n "$ATLAS_NAMESPACE" "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  if [[ "$phase" == "Succeeded" || "$phase" == "Failed" ]]; then
+    oc logs -n "$ATLAS_NAMESPACE" "pod/${POD}" || true
+    break
+  fi
+  sleep 5
+done
+
 oc wait -n "$ATLAS_NAMESPACE" --for=jsonpath='{.status.phase}'=Succeeded "pod/${POD}" --timeout=24h
 oc delete pod -n "$ATLAS_NAMESPACE" "$POD" --ignore-not-found=true >/dev/null 2>&1 || true
