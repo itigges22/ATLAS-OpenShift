@@ -168,6 +168,24 @@ oc rsync ${BENCH_POD#pod/}:/bench/ATLAS/benchmark/results/ benchmark/results/
 services. Results land on the `atlas-results` PVC (`/bench`), so they survive
 pod restarts; rsync them back when the run finishes.
 
+## 4c. Decontaminated eval: LCB release selection
+
+The published lens training embeddings derive from LiveCodeBench v5
+evaluations, so benchmarking on v5 tests partly-memorized problems.
+`ATLAS_LCB_RELEASE` selects the LCB release (default `release_v5`); the
+cache filename tracks the release.
+
+LCB releases are cumulative — `release_v6` (1055 problems) contains nearly
+all of v5 (880), so plain v6 is NOT decontaminated. Build a v6-minus-v5
+cache instead: fetch both releases, keep v6 rows whose `question_id` is not
+in v5 (175 problems), write them to
+`benchmark/datasets/.cache/livecodebench_v6only.jsonl`, and run with
+`ATLAS_LCB_RELEASE=release_v6only` — the loader uses any complete cache
+matching the name without downloading. If the datasets-server rows API
+502s (it does, persistently, on heavy v6 pages), fetch the parquet shards
+from `huggingface.co/api/datasets/bzantium/livecodebench/parquet/<release>/test`
+and apply the same row-slimming as the loader.
+
 ## 5. Run the Qwen/Gemma matrix
 
 Edit `ATLAS_BENCH_MODELS` in `openshift.env`, then run:

@@ -61,7 +61,8 @@ def _slim_row(row: dict) -> dict:
 
 class LiveCodeBenchDataset(BaseDataset):
     """
-    LiveCodeBench benchmark dataset (release_v5).
+    LiveCodeBench benchmark dataset (release selected by ATLAS_LCB_RELEASE,
+    default release_v5).
 
     Contains competitive programming problems with two evaluation modes:
     - Problems with starter_code: function completion (LeetCode-style)
@@ -77,8 +78,12 @@ class LiveCodeBenchDataset(BaseDataset):
         "livecodebench/code_generation_lite",
         "bzantium/livecodebench",
     ]
-    CONFIG = "release_v5"
-    FILENAME = "livecodebench_v5.jsonl"
+    # Release is env-selectable so eval can run on a different problem set
+    # than the one lens training data derives from (e.g. train on v5-era
+    # traces, benchmark on release_v6) without touching code. The cache
+    # filename carries the release so switching never reuses a stale cache.
+    CONFIG = os.environ.get("ATLAS_LCB_RELEASE", "release_v5")
+    FILENAME = f"livecodebench_{CONFIG.removeprefix('release_')}.jsonl"
 
     @property
     def name(self) -> str:
@@ -137,7 +142,7 @@ class LiveCodeBenchDataset(BaseDataset):
 
         # Try each dataset source in order
         for dataset_id in self.DATASET_IDS:
-            print(f"Downloading LiveCodeBench (release_v5) from {dataset_id}...")
+            print(f"Downloading LiveCodeBench ({self.CONFIG}) from {dataset_id}...")
             rows = []
             complete = False
 
