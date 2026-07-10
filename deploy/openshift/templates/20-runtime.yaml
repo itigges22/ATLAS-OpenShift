@@ -46,6 +46,13 @@ spec:
         - {name: BATCH_SIZE, value: "${ATLAS_BATCH}"}
         - {name: UBATCH_SIZE, value: "${ATLAS_UBATCH}"}
         - {name: SLOT_SAVE_PATH, value: "/tmp/slots"}
+        # The entrypoint passes no --threads, so llama-server defaults to
+        # one thread per two hardware cores (80 on the H200 node) while the
+        # container is CPU-limited far lower — the resulting cgroup thrash
+        # left decode host-bound at ~30 tok/s with the GPU 24% utilized.
+        # llama-server reads LLAMA_ARG_* as native arg defaults.
+        - {name: LLAMA_ARG_THREADS, value: "${ATLAS_LLAMA_THREADS}"}
+        - {name: LLAMA_ARG_THREADS_BATCH, value: "${ATLAS_LLAMA_THREADS}"}
         volumeMounts:
         - {name: models, mountPath: /models, readOnly: true}
         - {name: tmp, mountPath: /tmp}
