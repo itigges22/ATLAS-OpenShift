@@ -1,8 +1,8 @@
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 4b28033..b7a7a9d 100644
+index 98d0cca..1445703 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -18,11 +18,16 @@
+@@ -20,10 +20,15 @@
  #include <algorithm>
  #include <cstddef>
  #include <cinttypes>
@@ -13,13 +13,12 @@ index 4b28033..b7a7a9d 100644
  #include <filesystem>
 +#include <set>
  #include <utility>
- 
-+#include "ggml-backend.h"
 +
++#include "ggml-backend.h"
+ #include <fstream>
+ 
  // fix problem with std::min and std::max
- #if defined(_WIN32)
- #define WIN32_LEAN_AND_MEAN
-@@ -36,6 +41,57 @@ using json = nlohmann::ordered_json;
+@@ -39,6 +44,58 @@ using json = nlohmann::ordered_json;
  
  constexpr int HTTP_POLLING_SECONDS = 1;
  
@@ -74,10 +73,11 @@ index 4b28033..b7a7a9d 100644
 +    return true;
 +}
 +
- static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, bool on_device, llama_pos pos_min = -1, llama_pos pos_max = -1) {
-     if (pos_min == -1) {
-         pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), id);
-@@ -705,6 +761,10 @@ private:
++
+ static uint32_t server_n_outputs_max(const common_params & params) {
+     const uint32_t n_batch  = params.n_batch;
+ 
+@@ -937,6 +994,11 @@ private:
  
      bool sleeping = false;
  
@@ -85,23 +85,25 @@ index 4b28033..b7a7a9d 100644
 +    // Lives for the server's lifetime; cb_eval points at it via user_data.
 +    atlas_hidden_states_capture hidden_states_capture;
 +
-     void destroy() {
-         llama_init.reset();
++
+     int64_t t_last_load_progress_ms = 0;
  
-@@ -757,6 +817,12 @@ private:
+     void destroy() {
+@@ -1011,6 +1073,13 @@ private:
+         const bool is_resume = sleeping;
  
          params_base = params;
- 
++
 +        // ATLAS PC-202: install hidden-states capture callback BEFORE context init.
 +        // The callback always runs (cheap when no layers are requested) and consults
 +        // hidden_states_capture.layers_wanted to decide whether to copy out data.
 +        params_base.cb_eval           = atlas_capture_cb_eval;
 +        params_base.cb_eval_user_data = &hidden_states_capture;
 +
-         llama_init = common_init_from_params(params_base);
+         params_base.n_outputs_max = server_n_outputs_max(params_base);
  
-         model = llama_init->model();
-@@ -1714,6 +1780,32 @@ private:
+         const bool has_mmproj = !params.mmproj.path.empty();
+@@ -2172,6 +2241,32 @@ private:
              res->embedding.emplace_back(embd, embd + n_embd_out);
          }
  
@@ -134,9 +136,9 @@ index 4b28033..b7a7a9d 100644
          SLT_DBG(slot, "%s", "sending embeddings\n");
  
          queue_results.send(std::move(res));
-@@ -2799,6 +2891,25 @@ private:
-                 batch.logits   + i,
-             };
+@@ -3564,6 +3659,25 @@ private:
+             n_empty_consecutive = 0;
+         }
  
 +            // ATLAS PC-202: populate hidden-states capture state for THIS decode pass.
 +            // The cb_eval already installed at init consults this state; if no slot
@@ -153,14 +155,14 @@ index 4b28033..b7a7a9d 100644
 +                }
 +            }
 +            if (!hidden_states_capture.layers_wanted.empty()) {
-+                hidden_states_capture.batch_n_tokens = n_tokens;
-+                hidden_states_capture.hidden_dim     = llama_model_n_embd(model);
++                hidden_states_capture.batch_n_tokens = batch_view.n_tokens;
++                hidden_states_capture.hidden_dim     = llama_model_n_embd(model_tgt);
 +            }
 +
-             const int ret = llama_decode(ctx, batch_view);
+         const int ret = llama_decode(ctx_tgt, batch_view);
  
-             metrics.on_decoded(slots);
-@@ -4309,6 +4420,50 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
+         metrics.on_decoded(slots);
+@@ -5234,6 +5348,50 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
          }
      }
  
@@ -187,7 +189,7 @@ index 4b28033..b7a7a9d 100644
 +                ERROR_TYPE_INVALID_REQUEST));
 +            return res;
 +        }
-+        const int n_layer = llama_model_n_layer(ctx_server.model);
++        const int n_layer = llama_model_n_layer(ctx_server.model_tgt);
 +        std::set<int> seen;
 +        for (const auto & v : layers_json) {
 +            if (!v.is_number_integer()) {
@@ -211,7 +213,7 @@ index 4b28033..b7a7a9d 100644
      // create and queue the task
      json responses = json::array();
      auto & rd = res->rd;
-@@ -4324,6 +4479,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
+@@ -5249,6 +5407,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
              task.params.res_type = res_type;
              task.params.embd_normalize = embd_normalize;
  
@@ -222,7 +224,7 @@ index 4b28033..b7a7a9d 100644
          }
          rd.post_tasks(std::move(tasks));
 diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
-index 45e5168..dcf3149 100644
+index 8d611e5..bd6b8f0 100644
 --- a/tools/server/server-task.cpp
 +++ b/tools/server/server-task.cpp
 @@ -9,6 +9,7 @@
@@ -233,7 +235,7 @@ index 45e5168..dcf3149 100644
  
  using json = nlohmann::ordered_json;
  
-@@ -1823,10 +1824,38 @@ json server_task_result_embd::to_json() {
+@@ -1494,10 +1495,38 @@ json server_task_result_embd::to_json() {
  }
  
  json server_task_result_embd::to_json_non_oaicompat() {
@@ -274,10 +276,10 @@ index 45e5168..dcf3149 100644
  
  json server_task_result_embd::to_json_oaicompat() {
 diff --git a/tools/server/server-task.h b/tools/server/server-task.h
-index 289e1fb..1606fd0 100644
+index dc6b2da..e86374f 100644
 --- a/tools/server/server-task.h
 +++ b/tools/server/server-task.h
-@@ -87,6 +87,11 @@ struct task_params {
+@@ -97,6 +97,11 @@ struct task_params {
      // Embeddings
      int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
  
@@ -289,7 +291,7 @@ index 289e1fb..1606fd0 100644
      json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
      json to_json(bool only_metrics = false) const;
  };
-@@ -470,6 +475,12 @@ struct server_task_result_embd : server_task_result {
+@@ -476,6 +481,12 @@ struct server_task_result_embd : server_task_result {
  
      int32_t n_tokens;
  

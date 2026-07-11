@@ -68,7 +68,11 @@ COPY patches/ /patches/
 #   1. There's a llama.cpp release with a feature/fix we want
 #   2. The PC-202 patch has been regenerated against the new upstream
 # Override at build time: --build-arg LLAMA_CPP_REV=<sha>
-ARG LLAMA_CPP_REV=2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1
+# Current pin: b9966 (2026-07-11) — brings Gemma-4 MTP support (merged
+# upstream 2026-06-08). The PC-202 patch was regenerated for this rev:
+# upstream moved llama_decode into server_context_impl::decode() and
+# renamed model->model_tgt/ctx->ctx_tgt in the speculative refactor.
+ARG LLAMA_CPP_REV=c749cb041706647f460bb918cccc9d91995205ab
 # #117: Split fetch -> patch -> build into three RUN layers so a
 # LLAMA_CPP_REV bump or a patches/ change invalidates only the affected
 # layer + everything below, not the whole giant step. The build is the
