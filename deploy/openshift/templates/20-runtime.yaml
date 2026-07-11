@@ -53,6 +53,11 @@ spec:
         # llama-server reads LLAMA_ARG_* as native arg defaults.
         - {name: LLAMA_ARG_THREADS, value: "${ATLAS_LLAMA_THREADS}"}
         - {name: LLAMA_ARG_THREADS_BATCH, value: "${ATLAS_LLAMA_THREADS}"}
+        # MTP self-speculation (llama.cpp >= b9549; needs an MTP-variant
+        # GGUF). "none" disables. Lossless w.r.t. the target distribution —
+        # draft tokens are verified by the main model before acceptance.
+        - {name: LLAMA_ARG_SPEC_TYPE, value: "${ATLAS_LLAMA_SPEC_TYPE}"}
+        - {name: LLAMA_ARG_SPEC_DRAFT_N_MAX, value: "${ATLAS_LLAMA_SPEC_DRAFT_MAX}"}
         volumeMounts:
         - {name: models, mountPath: /models, readOnly: true}
         - {name: tmp, mountPath: /tmp}
