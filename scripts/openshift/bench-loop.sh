@@ -10,8 +10,11 @@
 # control arm (this exact failure burned the 2026-07-10 routed run: lens
 # /ready was green but its embedding calls starved behind saturated
 # llama slots, so 138/146 tasks recorded all-zero energies).
-LABEL="${1:?usage: bench-loop.sh <label> [total_tasks]}"
+LABEL="${1:?usage: bench-loop.sh <label> [total_tasks] [order]}"
 TOTAL="${2:-175}"
+# routed-first: run the lens arm before the baseline re-pair (the routed
+# number is usually the one being waited on; baseline is cheap at MTP speed).
+ORDER="${3:-baseline-first}"
 TRIP_N=8
 
 cd /bench/ATLAS
@@ -91,9 +94,14 @@ run_arm() {  # $1 = run id, $2 = runner args, $3 = tripwire yes/no
   done
 }
 
-echo "$(date -u +%FT%TZ) bench-loop start: $LABEL ($TOTAL tasks)"
-run_arm "$BASE" "--baseline" no || exit 1
-run_arm "$ROUTED" "--selection-strategy lens" yes || exit 1
+echo "$(date -u +%FT%TZ) bench-loop start: $LABEL ($TOTAL tasks, $ORDER)"
+if [ "$ORDER" = "routed-first" ]; then
+  run_arm "$ROUTED" "--selection-strategy lens" yes || exit 1
+  run_arm "$BASE" "--baseline" no || exit 1
+else
+  run_arm "$BASE" "--baseline" no || exit 1
+  run_arm "$ROUTED" "--selection-strategy lens" yes || exit 1
+fi
 # Final energy audit is printed so 'how many scores were real' is a
 # number in the log, not a question someone has to remember to ask.
 energies_ok "$ROUTED"
