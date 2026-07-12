@@ -190,6 +190,33 @@ if [ -s "$TOKEN_FILE" ]; then
   echo "Internal auth: enabled (api-key-file)"
 fi
 
+# Dedicated embedding sidecar process (ATLAS_EMBED_PORT). llama-server has
+# one FIFO task queue with no priorities, so under sustained multi-slot
+# generation load (benchmarks; multi-agent use) a 2-second embedding job
+# can queue for minutes behind 8k-token completions — the Geometric Lens
+# then times out and candidates score as the neutral sentinel. A second
+# server process on the same GPU serving ONLY /embedding makes lens
+# scoring latency independent of generation load. Weights cost is one
+# extra model copy in VRAM; spec decode is forced off (drafting is
+# pointless for embeddings).
+if [ -n "${ATLAS_EMBED_PORT:-}" ]; then
+  echo "  Embedding sidecar: port ${ATLAS_EMBED_PORT} (ctx ${ATLAS_EMBED_CTX:-16384}, ${ATLAS_EMBED_PARALLEL:-2} slots)"
+  LLAMA_ARG_SPEC_TYPE=none LLAMA_ARG_SPEC_DRAFT_N_MAX= \
+  /usr/local/bin/llama-server \
+    -m "$MODEL_FILE" \
+    -c "${ATLAS_EMBED_CTX:-16384}" \
+    --parallel "${ATLAS_EMBED_PARALLEL:-2}" \
+    -ngl 99 \
+    --fit off \
+    --host 0.0.0.0 \
+    --port "$ATLAS_EMBED_PORT" \
+    --flash-attn on \
+    -b "$BATCH_SIZE" \
+    -ub "$UBATCH_SIZE" \
+    --embeddings \
+    "${API_KEY_FLAGS[@]}" &
+fi
+
 exec /usr/local/bin/llama-server \
   -m "$MODEL_FILE" \
   -c "$CTX_LENGTH" \

@@ -34,8 +34,11 @@ spec:
         ports:
         - name: http
           containerPort: 8080
+        - name: embed
+          containerPort: ${ATLAS_EMBED_PORT}
         env:
         - {name: ATLAS_BACKEND, value: "cuda"}
+        - {name: ATLAS_EMBED_PORT, value: "${ATLAS_EMBED_PORT}"}
         - {name: MODEL_PATH, value: "/models/${ATLAS_MODEL_FILE}"}
         - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
         - {name: PORT, value: "8080"}
@@ -134,7 +137,7 @@ spec:
         - {name: http, containerPort: 8099}
         env:
         - {name: LLAMA_URL, value: "http://atlas-llama-server:8080"}
-        - {name: LLAMA_EMBED_URL, value: "http://atlas-llama-server:8080"}
+        - {name: LLAMA_EMBED_URL, value: "http://atlas-llama-embed:${ATLAS_EMBED_PORT}"}
         - {name: ATLAS_MODEL_NAME, value: "${ATLAS_MAIN_MODEL}"}
         - {name: GEOMETRIC_LENS_ENABLED, value: "true"}
         - {name: PROJECT_DATA_DIR, value: "/data/project-store/projects"}
@@ -456,3 +459,17 @@ spec:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-llama-embed
+  namespace: ${ATLAS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: atlas-llama-server
+    app.kubernetes.io/part-of: atlas-openshift
+spec:
+  selector:
+    app.kubernetes.io/name: atlas-llama-server
+  ports:
+  - {name: embed, port: ${ATLAS_EMBED_PORT}, targetPort: ${ATLAS_EMBED_PORT}}
