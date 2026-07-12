@@ -30,7 +30,11 @@ def score_candidate(text: str, rag_api_url: str) -> Tuple[float, float]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        # Timeout must outwait the lens's own embedding budget (120s against
+        # a llama-server whose slots are saturated by concurrent bench
+        # generations) — at 30s the client bailed first and recorded the
+        # sentinel with no lens-side error, silently dropping real scores.
+        with urllib.request.urlopen(req, timeout=150) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return (data.get("energy", 0.0), data.get("normalized", 0.5))
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
