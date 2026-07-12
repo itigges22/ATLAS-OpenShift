@@ -201,7 +201,7 @@ fi
 # pointless for embeddings).
 if [ -n "${ATLAS_EMBED_PORT:-}" ]; then
   echo "  Embedding sidecar: port ${ATLAS_EMBED_PORT} (ctx ${ATLAS_EMBED_CTX:-16384}, ${ATLAS_EMBED_PARALLEL:-2} slots)"
-  LLAMA_ARG_SPEC_TYPE=none LLAMA_ARG_SPEC_DRAFT_N_MAX= \
+  LLAMA_ARG_SPEC_TYPE=none LLAMA_ARG_SPEC_DRAFT_N_MAX=1 \
   /usr/local/bin/llama-server \
     -m "$MODEL_FILE" \
     -c "${ATLAS_EMBED_CTX:-16384}" \
