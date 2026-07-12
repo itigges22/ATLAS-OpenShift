@@ -72,11 +72,15 @@ else
   python3 -c "exit(0 if float('$out')>=50 else 1)" 2>/dev/null; need $? "decode >= 50 tok/s (spec decode disabled)"
 fi
 
-echo "=== 2. embeddings + PC-202 hidden states ==="
+EMBED_URL="http://atlas-llama-server:8080"
+if [ -n "${ATLAS_EMBED_PORT:-}" ]; then
+  EMBED_URL="http://atlas-llama-embed:${ATLAS_EMBED_PORT}"
+fi
+echo "=== 2. embeddings + PC-202 hidden states (via $EMBED_URL — the lens's lane) ==="
 out=$(pyexec "
 import urllib.request, json
 body=json.dumps({'content':'def f(x): return x*2'}).encode()
-req=urllib.request.Request('http://atlas-llama-server:8080/embedding', data=body, headers={'Content-Type':'application/json'})
+req=urllib.request.Request('$EMBED_URL/embedding', data=body, headers={'Content-Type':'application/json'})
 d=json.loads(urllib.request.urlopen(req, timeout=60).read())
 e=d[0]['embedding'] if isinstance(d,list) else d['embedding']
 if isinstance(e[0], list): e=e[0]
@@ -86,7 +90,7 @@ print(len(e))")
 out=$(pyexec "
 import urllib.request, json
 body=json.dumps({'content':'def f(x): return x*2','layers':[20]}).encode()
-req=urllib.request.Request('http://atlas-llama-server:8080/embedding', data=body, headers={'Content-Type':'application/json'})
+req=urllib.request.Request('$EMBED_URL/embedding', data=body, headers={'Content-Type':'application/json'})
 d=json.loads(urllib.request.urlopen(req, timeout=60).read())
 d0=d[0] if isinstance(d,list) else d
 hs=d0.get('hidden_states')
