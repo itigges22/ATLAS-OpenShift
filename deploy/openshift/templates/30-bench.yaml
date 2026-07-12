@@ -28,7 +28,10 @@ spec:
       - name: bench
         image: ghcr.io/${ATLAS_IMAGE_OWNER}/atlas-v3:${ATLAS_IMAGE_TAG}
         imagePullPolicy: IfNotPresent
-        command: ["sleep", "infinity"]
+        # Run the PVC-resident supervisor when present so an armed bench
+        # loop survives container restarts (see bench-supervisor.sh);
+        # fresh deployments without one behave as before.
+        command: ["sh", "-c", "[ -f /bench/supervisor.sh ] && exec sh /bench/supervisor.sh || exec sleep infinity"]
         env:
         - {name: LLAMA_URL, value: "http://atlas-llama-server:8080"}
         - {name: RAG_API_URL, value: "http://atlas-geometric-lens:8099"}
@@ -38,12 +41,16 @@ spec:
         - {name: bench, mountPath: /bench}
         - {name: tmp, mountPath: /tmp}
         resources:
+          # The v3 runner keeps every task result (telemetry, banked
+          # embeddings, full response texts) in memory for the whole run;
+          # at 4-way MTP pace the generic 4Gi service limit OOMKilled the
+          # pod mid-benchmark (2026-07-12, exit 137 at task 52).
           requests:
             cpu: ${ATLAS_SERVICE_CPU_REQUEST}
-            memory: ${ATLAS_SERVICE_MEMORY_REQUEST}
+            memory: 4Gi
           limits:
             cpu: ${ATLAS_SERVICE_CPU_LIMIT}
-            memory: ${ATLAS_SERVICE_MEMORY_LIMIT}
+            memory: 16Gi
       volumes:
       - name: bench
         persistentVolumeClaim: {claimName: atlas-results}
