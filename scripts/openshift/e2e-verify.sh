@@ -110,6 +110,19 @@ print(d.get('energy', 0.0))")
 echo "  idle energy: $out"
 python3 -c "exit(0 if float('$out')>0.001 else 1)" 2>/dev/null; need $? "score-text returns non-sentinel energy (idle)"
 
+# Worst-case candidate length: failing tasks emit up to the full
+# ATLAS_BENCH_MAX_TOKENS budget, and embedding requests 500 when the
+# input exceeds n_ubatch ('input too large to process') — caught live
+# 2026-07-12 after short-text checks passed. Score a ~7.5k-token text.
+out=$(pyexec "
+import urllib.request, json
+body=json.dumps({'text':'x = 1\n' * 1500}).encode()
+req=urllib.request.Request('http://atlas-geometric-lens:8099/internal/lens/score-text', data=body, headers={'Content-Type':'application/json'})
+d=json.loads(urllib.request.urlopen(req, timeout=180).read())
+print(d.get('energy', 0.0))")
+echo "  7.5k-token energy: $out"
+python3 -c "exit(0 if float('$out')>0.001 else 1)" 2>/dev/null; need $? "lens scores a worst-case-length candidate"
+
 echo "=== 4. lens scoring UNDER GENERATION LOAD (the 2026-07-11 failure mode) ==="
 out=$(pyexec "
 import urllib.request, json, threading, time
