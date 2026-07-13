@@ -95,7 +95,9 @@ run_arm() {  # $1 = run id, $2 = runner args, $3 = tripwire yes/no
 }
 
 echo "$(date -u +%FT%TZ) bench-loop start: $LABEL ($TOTAL tasks, $ORDER)"
-if [ "$ORDER" = "routed-first" ]; then
+if [ "$ORDER" = "routed-only" ]; then
+  run_arm "$ROUTED" "--selection-strategy lens" yes || exit 1
+elif [ "$ORDER" = "routed-first" ]; then
   run_arm "$ROUTED" "--selection-strategy lens" yes || exit 1
   run_arm "$BASE" "--baseline" no || exit 1
 else

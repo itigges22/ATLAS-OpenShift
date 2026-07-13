@@ -83,9 +83,11 @@ body=json.dumps({'content':'def f(x): return x*2'}).encode()
 req=urllib.request.Request('$EMBED_URL/embedding', data=body, headers={'Content-Type':'application/json'})
 d=json.loads(urllib.request.urlopen(req, timeout=60).read())
 e=d[0]['embedding'] if isinstance(d,list) else d['embedding']
-if isinstance(e[0], list): e=e[0]
-print(len(e))")
-[ "$out" = "4096" ]; need $? "/embedding returns 4096-dim"
+# Nested output means pooling NONE (per-token): the lens extractor would
+# silently take e[0] — the FIRST TOKEN's hidden state — which is how the
+# 2026-07-12 run scored every candidate on the embedding of 'def'.
+print('PER_TOKEN' if isinstance(e[0], list) else len(e))")
+[ "$out" = "4096" ]; need $? "/embedding returns ONE pooled 4096-dim vector (not per-token)"
 
 out=$(pyexec "
 import urllib.request, json
