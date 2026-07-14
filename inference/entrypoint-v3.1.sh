@@ -214,6 +214,7 @@ if [ -n "${ATLAS_EMBED_PORT:-}" ]; then
     -b "$BATCH_SIZE" \
     -ub "$UBATCH_SIZE" \
     --embeddings \
+    --pooling "${ATLAS_EMBED_POOLING:-mean}" \
     "${API_KEY_FLAGS[@]}" &
 fi
 
@@ -234,6 +235,7 @@ exec /usr/local/bin/llama-server \
   --slot-save-path "$SLOT_SAVE_PATH" \
   --ctx-checkpoints 0 \
   --embeddings \
+  --pooling "${ATLAS_EMBED_POOLING:-mean}" \
   --jinja \
   "${CVECTOR_FLAGS[@]}" \
   "${API_KEY_FLAGS[@]}"
