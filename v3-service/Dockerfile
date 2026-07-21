@@ -1,5 +1,5 @@
 # python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:b27df5841f3355e9473f9a516d38a6783b6c8dfeacaf2d14a240f443b368ddb6
+FROM docker.io/python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
 WORKDIR /app
 
 # Install system deps
@@ -24,6 +24,10 @@ COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
 COPY v3-service/graph/ /app/graph/
+# V3.2 RPG-style planning (issue #120): wavelet substrate + RPG construction.
+# Pure stdlib — no extra pip installs needed.
+COPY v3-service/wavelet/ /app/wavelet/
+COPY v3-service/rpg.py /app/rpg.py
 
 # Non-root application account created inside this image. The V3 service
 # writes nothing to the container fs at runtime (telemetry disabled; it

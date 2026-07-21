@@ -1,7 +1,7 @@
 """
 Multi-language sandbox execution server.
 
-Supports: Python, JavaScript/TypeScript, Go, Rust, C/C++, Bash/Shell
+Supports: Python, JavaScript/TypeScript, Go, Java, Kotlin, Rust, C/C++, Ruby, PHP, Bash/Shell
 Provides isolated code execution with resource limits and structured error reporting.
 
 Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
@@ -19,12 +19,18 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
     user-controlled paths inside the workspace, or treat agent-supplied
     code as untrusted — that's the container's job.
 
-    CodeQL routinely flags `py/command-line-injection` and
-    `py/path-injection` here. Those alerts are by-design false positives:
-    accepting + executing user-controlled commands is the requirement,
-    and the cmd-list form (no shell=True at the Python layer) prevents
-    Python-level injection. Don't add input validation that would break
-    the sandbox's purpose; dismiss the alerts with rationale instead.
+    CodeQL flags `py/command-line-injection` here. Those alerts are
+    by-design false positives: accepting + executing user-controlled
+    commands is the requirement, and the cmd-list form (no shell=True at
+    the Python layer) prevents Python-level injection. Don't add input
+    validation that would break the sandbox's purpose; dismiss the
+    alerts with rationale instead.
+
+    `py/path-injection` is handled differently: every workspace path
+    derived from request data goes through _contained_path(), whose
+    normpath + prefix check is the sanitizer form CodeQL recognizes.
+    Route any new request-derived file write through it and the query
+    stays quiet without per-PR dismissals.
 """
 
 import contextlib
@@ -117,6 +123,10 @@ SUPPORTED_LANGUAGES = {
     "xml",
     "json",
     "yaml", "yml",
+    "java",
+    "kotlin", "kt", "kts",
+    "ruby", "rb",
+    "php",
 }
 
 def normalize_language(lang: str) -> str:
@@ -145,6 +155,14 @@ def normalize_language(lang: str) -> str:
         return "json"
     if lang in ("yaml", "yml"):
         return "yaml"
+    if lang in ("java",):
+        return "java"
+    if lang in ("kotlin", "kt", "kts",):
+        return "kotlin"
+    if lang in ("ruby", "rb"):
+        return "ruby"
+    if lang in ("php",):
+        return "php"
     return lang
 
 
@@ -194,6 +212,10 @@ def list_languages():
         "javascript": ["node", "--version"],
         "typescript": ["tsc", "--version"],
         "go": ["go", "version"],
+        "java": ["javac", "--version"],
+        "kotlin": ["kotlinc", "-version"],
+        "ruby": ["ruby", "--version"],
+        "php": ["php", "--version"],
         "rust": ["rustc", "--version"],
         "c": ["gcc", "--version"],
         "cpp": ["g++", "--version"],
@@ -384,6 +406,23 @@ def _safe_overlay_path(name: str) -> Path:
     if rel.is_absolute() or name.startswith("\\") or ".." in rel.parts:
         raise HTTPException(status_code=400, detail=f"unsafe overlay file path: {name!r}")
     return rel
+
+
+def _contained_path(base: Path, *parts: str) -> Path:
+    """Join parts under base, enforcing containment.
+
+    The inputs are already constrained (request filenames pass
+    _safe_overlay_path; Java class/package names come from restrictive
+    regexes), but those guards raise instead of transforming the value,
+    which CodeQL's py/path-injection taint tracking cannot follow. This
+    normpath + prefix check is the sanitizer form the query recognizes,
+    so new language branches stop accruing one alert per PR.
+    """
+    resolved = os.path.normpath(os.path.join(str(base), *parts))
+    if not resolved.startswith(str(base) + os.sep):
+        raise HTTPException(status_code=400,
+                            detail=f"unsafe file path: {'/'.join(parts)!r}")
+    return Path(resolved)
 
 
 def _write_overlay_files(root: Path, files: Dict[str, str]):
@@ -755,10 +794,10 @@ def execute_code(request: ExecuteRequest):
     """Execute code in isolated environment."""
     lang = normalize_language(request.language)
 
-    if lang not in ("python", "javascript", "typescript", "go", "rust", "c", "cpp", "bash"):
+    if lang not in ("python", "javascript", "typescript", "go", "java", "kotlin", "rust", "c", "cpp", "ruby", "php", "bash"):
         raise HTTPException(
             status_code=400,
-            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, rust, c, cpp, bash"
+            detail=f"Language '{request.language}' not supported. Supported: python, javascript, typescript, go, java, kotlin, rust, c, cpp, ruby, php, bash"
         )
 
     workspace = tempfile.mkdtemp(dir=WORKSPACE_BASE)
@@ -841,6 +880,8 @@ def syntax_check(request: SyntaxCheckRequest):
             language=lang,
             check_time_ms=elapsed,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         elapsed = int((time.time() - start) * 1000)
         return SyntaxCheckResponse(
@@ -852,14 +893,47 @@ def syntax_check(request: SyntaxCheckRequest):
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
+def _extract_java_package(code: str) -> str | None:
+    """Extract package name from Java source, return None if no package decl."""
+    match = re.search(r'^\s*package\s+([\w.$]+)\s*;', code, re.MULTILINE)
+    if not match:
+        return None
+    package_name = match.group(1)
+    
+    # VALIDATE: each dot-segment must be safe Java identifier
+    segments = package_name.split('.')
+    for seg in segments:
+        if not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]*', seg):
+            return None  # malformed/malicious package name, ignore it
+    
+    return package_name
+
+def _extract_java_classname(code: str) -> str:
+    """
+    Extracts the public class, interface, enum, or record name from Java code.
+    Defaults to 'Main' if no public type is found.
+    """
+
+    pattern = r"\bpublic\s+(?:(?:abstract|final|strictfp|sealed|non-sealed|@[A-Za-z0-9_$.]+)\s+)*(?:class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)"
+    
+    match = re.search(pattern, code)
+    if match:
+        return match.group(1)
+    
+    return "Main"
+
 
 def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional[str] = None) -> List[str]:
     """Language-specific syntax checking. Returns list of error strings."""
+    # Reject path-traversal filenames (absolute, .., backslash escapes)
+    # before any language branch can write outside the workspace.
+    if filename:
+        _safe_overlay_path(filename)
     errors = []
 
     if lang == "python":
         # Use py_compile for fast AST parse
-        fpath = workspace / (filename or "check.py")
+        fpath = _contained_path(workspace, filename or "check.py")
         fpath.write_text(code)
         result = _run_cmd(["python3", "-m", "py_compile", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
@@ -873,14 +947,14 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "javascript":
-        fpath = workspace / (filename or "check.js")
+        fpath = _contained_path(workspace, filename or "check.js")
         fpath.write_text(code)
         result = _run_cmd(["node", "--check", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
             errors.append(result.get("stderr", "").strip())
 
     elif lang == "typescript":
-        fpath = workspace / (filename or "check.ts")
+        fpath = _contained_path(workspace, filename or "check.ts")
         fpath.write_text(code)
         # tsc --noEmit for type checking; fall back to tsx parse
         result = _run_cmd(["tsc", "--noEmit", "--strict", str(fpath)], timeout=10, cwd=workspace)
@@ -891,7 +965,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                     errors.append(line)
 
     elif lang == "go":
-        fpath = workspace / (filename or "main.go")
+        fpath = _contained_path(workspace, filename or "main.go")
         fpath.write_text(code)
         # Use gofmt -e for fast syntax-only checking (no compilation, no go.mod needed)
         result = _run_cmd(["gofmt", "-e", str(fpath)], timeout=5, cwd=workspace)
@@ -902,8 +976,58 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
                 if line:
                     errors.append(line)
 
+    elif lang == "java":
+        class_name = _extract_java_classname(code) 
+        package = _extract_java_package(code) 
+
+        if package:
+            # com.exampe => com/example
+            fpath = _contained_path(workspace, *package.split('.'),
+                                    f"{class_name}.java")
+            fpath.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            fpath = _contained_path(workspace, f"{class_name}.java")
+
+        fpath.write_text(code)
+        result = _run_cmd(
+            ["javac", "-d", str(workspace), str(fpath)],
+            timeout=10, cwd=workspace
+        )
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                if "error:" in line:
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+
+    elif lang == "kotlin":
+        fpath = _contained_path(workspace, filename or "Source.kt")
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fpath.write_text(code)
+        classes_dir = workspace / "synccheck_out"
+        classes_dir.mkdir(exist_ok=True)
+
+        # No syntax-only check in kotlinc. Full compile to temp
+        # output dir is the check, same approach as Java
+        result = _run_cmd(
+            ["kotlinc", "-d", str(classes_dir), str(fpath)],
+            timeout=30, cwd=workspace
+        )
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                # kotlinc emits errors as either an `e:`-prefixed line or a
+                # `file.kt:L:C: error:` line. Match both — but NOT a bare
+                # "error" substring, which also hits `w:` warning lines that
+                # merely mention the word (false-positive syntax failures).
+                if line.strip().startswith("e:") or ": error:" in line:
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+
     elif lang == "rust":
-        fpath = workspace / (filename or "check.rs")
+        fpath = _contained_path(workspace, filename or "check.rs")
         fpath.write_text(code)
         # rustc --edition 2021 with no codegen for syntax-only
         result = _run_cmd(
@@ -920,7 +1044,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 
     elif lang in ("c", "cpp"):
         ext = ".c" if lang == "c" else ".cpp"
-        fpath = workspace / (filename or f"check{ext}")
+        fpath = _contained_path(workspace, filename or f"check{ext}")
         fpath.write_text(code)
         compiler = "gcc" if lang == "c" else "g++"
         flags = ["-std=c17"] if lang == "c" else ["-std=c++17"]
@@ -937,8 +1061,42 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
 
+    elif lang == "ruby":
+        fpath = _contained_path(workspace, filename or "main.rb")
+        fpath.write_text(code)
+        # Use ruby -c for syntax-only checking (no execution)
+        result = _run_cmd(["ruby", "-c", str(fpath)], timeout=5, cwd=workspace)
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                if "syntax error" in line or "error" in line.lower():
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+
+    elif lang == "php":
+        fpath = _contained_path(workspace, filename or "main.php")
+        fpath.write_text(code)
+        # Use php -l for lint/syntax-only checking (no execution)
+        result = _run_cmd(["php", "-l", str(fpath)], timeout=5, cwd=workspace)
+        if result["returncode"] != 0:
+            # The real "PHP Parse error: ..." detail goes to stderr (with
+            # display_errors=Off, the Debian CLI default); stdout carries
+            # only the generic "Errors parsing main.php" summary. Scan both
+            # so builds that route the message to stdout still work.
+            output = (result.get("stderr", "") + "\n" + result.get("stdout", "")).strip()
+            for line in output.splitlines():
+                line = line.strip()
+                # PHP explicitly tags syntax issues as "Parse error" or "Fatal error"
+                if "parse error" in line.lower() or "error" in line.lower():
+                    # Filter out PHP's generic summary line "Errors parsing main.php"
+                    if not line.startswith("Errors parsing"):
+                        errors.append(line)
+            if not errors and output:
+                errors.append(output.split("\n")[-1])
+
     elif lang == "bash":
-        fpath = workspace / (filename or "check.sh")
+        fpath = _contained_path(workspace, filename or "check.sh")
         fpath.write_text(code)
         result = _run_cmd(["bash", "-n", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
@@ -1242,6 +1400,80 @@ def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
     )
 
 
+# --- Java ---
+def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    class_name = _extract_java_classname(code) 
+    package = _extract_java_package(code) 
+
+    if package:
+        # com.exampe => com/example
+        fpath = _contained_path(workspace, *package.split('.'),
+                                f"{class_name}.java")
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fully_qualified_name = f"{package}.{class_name}"
+    else:
+        fpath = _contained_path(workspace, f"{class_name}.java")
+        fully_qualified_name = class_name
+
+    fpath.write_text(code)
+
+    # Compile with -d workspace so .class appears in matching package dir
+    r = _run_cmd(["javac", "-d", str(workspace), str(fpath)], 30, cwd=workspace)
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", stderr=r["stderr"],
+            error_type="CompileError", error_message=r["stderr"][:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run 
+    r = _run_cmd(["java", "-cp", str(workspace), fully_qualified_name], timeout, cwd=workspace, stdin=stdin)
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
+        error_message=r["stderr"][:500] if not r["success"] else None,
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
+# --- Kotlin --- 
+
+def execute_kotlin(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    fpath = workspace / "Source.kt"
+    fpath.write_text(code)
+    jar_path = workspace / "output.jar"
+    
+    # Compile
+    r = _run_cmd(
+        ["kotlinc", "-include-runtime", "-d", str(jar_path), str(fpath)],
+        60, cwd=workspace
+    )
+
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0, 
+            stdout="", stderr=r["stderr"],
+            error_type="CompileError", error_message=r["stderr"][:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run
+    r = _run_cmd(["java", "-jar", str(jar_path)], timeout, cwd=workspace, stdin=stdin)
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None, 
+        error_message=r["stderr"][:500] if not r["success"] else None, 
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
 # --- Rust ---
 
 def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
@@ -1334,6 +1566,70 @@ def execute_cpp(code, test_code, workspace, timeout, stdin=None, **_):
     )
 
 
+# --- Ruby ---
+
+def execute_ruby(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    main_file = workspace / "main.rb"
+    main_file.write_text(code)
+
+    # Syntax check (no compile step for Ruby)
+    r = _run_cmd(["ruby", "-c", str(main_file)], 15)
+    if not r["success"]:
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", stderr=r["stderr"],
+            error_type="SyntaxError", error_message=r["stderr"][:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run
+    r = _run_cmd(["ruby", str(main_file)], timeout, cwd=workspace, stdin=stdin)
+
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
+        error_message=r["stderr"][:500] if not r["success"] else None,
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
+
+# --- PHP ---
+
+def execute_php(code, test_code, workspace, timeout, stdin=None, **_):
+    start = time.time()
+    main_file = workspace / "main.php"
+    main_file.write_text(code)
+
+    # Lint check (no compile step for PHP)
+    r = _run_cmd(["php", "-l", str(main_file)], 15)
+    if not r["success"]:
+        # Real parse error lives in stderr; stdout only has generic summary line
+        error_output = r["stderr"] or r["stdout"]
+        return ExecuteResponse(
+            success=False, compile_success=False,
+            tests_run=0, tests_passed=0,
+            stdout="", stderr=error_output,
+            error_type="SyntaxError", error_message=error_output[:500],
+            execution_time_ms=int((time.time() - start) * 1000),
+        )
+
+    # Run
+    r = _run_cmd(["php", str(main_file)], timeout, cwd=workspace, stdin=stdin)
+
+    return ExecuteResponse(
+        success=r["success"], compile_success=True,
+        tests_run=1, tests_passed=1 if r["success"] else 0,
+        stdout=r["stdout"], stderr=r["stderr"],
+        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
+        error_message=r["stderr"][:500] if not r["success"] else None,
+        execution_time_ms=int((time.time() - start) * 1000),
+    )
+
+
 # --- Bash ---
 
 def execute_bash(code, test_code, workspace, timeout, stdin=None, **_):
@@ -1376,6 +1672,10 @@ LANGUAGE_HANDLERS = {
     "c": execute_c,
     "cpp": execute_cpp,
     "bash": execute_bash,
+    "java": execute_java,
+    "kotlin": execute_kotlin,
+    "ruby": execute_ruby,
+    "php": execute_php,
 }
 
 

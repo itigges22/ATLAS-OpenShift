@@ -148,7 +148,10 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | C / C++ | executed (gcc/g++) | Supported |
 | Bash / sh | executed | Supported |
 | HTML / XML / JSON / YAML | syntax | Supported |
-| Java / Kotlin / Ruby / PHP | — | Roadmap (will ship as separate toolchain images, not in the default sandbox) |
+| Java | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
+| Kotlin | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
+| Ruby | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
+| PHP | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
 
 ## Feature paths
 

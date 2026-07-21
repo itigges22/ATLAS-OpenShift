@@ -450,6 +450,12 @@ metadata:
   labels:
     app.kubernetes.io/name: atlas-proxy
     app.kubernetes.io/part-of: atlas-openshift
+  annotations:
+    # HAProxy's default server timeout is 30s. Agentic turns (a local
+    # model at fidelity serving speed + thinking) routinely exceed that
+    # and 504 mid-generation, cascading into agent-harness failure. Size
+    # this to the longest single generation, not the whole task.
+    haproxy.router.openshift.io/timeout: "600s"
 spec:
   to:
     kind: Service

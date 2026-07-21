@@ -241,11 +241,15 @@ See [PLAN_MODE.md](PLAN_MODE.md) for the full flow, components, tunables, skip c
 
 ### Safety Limits
 
-Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`.
+Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
+
+**Fast-path writes during active iteration.** V3 fires on the *first* write of a T2+ file (baseline generation). But once the model has written a file and just saw it fail a run, the next write is a targeted fix in an edit-test-fix loop — it skips V3 (still syntax-gated) and writes directly. V3's full pipeline is multi-minute per call and, on a file mid-debug, frequently completes without a usable result and falls back anyway; paying that latency per iteration throttles the loop to a handful of cycles. The fast-path keys off `SessionWrites[path]` plus a failed most-recent run referencing the file.
+
+**Iteration vs. repetition.** The loop breakers distinguish a model *iterating toward a fix* from one *spinning*. `write_file` repetition is keyed on the target path **plus a whitespace-stripped content fingerprint**: reasserting the same draft collides and counts toward the threshold, but rewriting a file with materially different content (fixing successive compiler errors) produces distinct signatures and is not counted. When repetition *is* detected, the breaker **steers before it kills** — the first detection injects a corrective `[system note]` and the loop continues; only a second detection (the model repeated after seeing the nudge) ends the session. This replaced an immediate hard-stop that terminated legitimate iteration with the solution on disk but unverified.
 
 | Limit | Value | Purpose |
 |-------|-------|---------|
-| Conversation trim | Sliding window sized to the slot: keep system + most-recent-user-instruction + the active file's content + as many trailing messages as fit `per-slot context − ATLAS_MAX_TOKENS − 2048` (floor: keep 8; hard ceiling via `ATLAS_AGENT_HISTORY_BUDGET`) | Prevent context overflow without dropping the file under edit |
+| Conversation trim | Sliding window sized to the slot: keep system + most-recent-user-instruction + the active file's content + as many trailing messages as fit `per-slot context − ATLAS_MAX_TOKENS − 2048 − slot/8` (the `slot/8` term is tokenizer slack: the chars/4 estimate under-counts dense code/JSON). The pinned instruction and file content are counted against the budget, not just re-injected. Floor: keep 8; hard ceiling via `ATLAS_AGENT_HISTORY_BUDGET`. If llama-server still rejects the prompt as over-context, the loop force-trims to the minimum window and retries once instead of killing the session | Prevent context overflow without dropping the file under edit |
 | Redundant-read short-circuit | Whole-file re-read of an unchanged file returns an "already in context" pointer only while the content is still live; otherwise the full file is re-served (`ATLAS_DEDUP_READS=0` disables) | Avoid re-encoding an unchanged file every turn without the model editing blind |
 | V3 interactive wall-clock cap | Single V3 pipeline call capped at `ATLAS_V3_TIMEOUT` (default 180s); on timeout the proxy falls back to the model's syntax-gated content (`0` disables) | Keep an interactive session responsive under a long repair stall |
 | Per-turn reasoning budget | Cut the stream after ~6144 reasoning tokens (`ATLAS_REASONING_BUDGET`, 0 disables); recovery extracts an embedded tool_call or re-prompts | Bound reasoning spirals |
@@ -329,7 +333,7 @@ Wait injection appends "Wait, let me reconsider.\n" to request a longer reasonin
 
 **Phase 2: Verification and Selection**
 
-- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
+- **Build Verification**: Python (`py_compile`), TypeScript (`tsc --noEmit`), JavaScript (`node --check`), Go (`go build`), Java (`javac`), Kotlin (`kotlinc`), Rust (`rustc` on the sandbox `/execute` path; `Cargo.toml` projects are detected with `cargo build`, and `cargo check` is accepted only via the build-command allowlist), C/C++ (full `gcc`/`g++` compile with `-Wall` on `/execute`; `-fsyntax-only` applies only to the `/syntax-check` route), Ruby (`ruby -c`, no compile step — interpreted), PHP (`php -l`, no compile step — interpreted), Shell (`bash -n`). Framework overrides for Next.js, React, Flask, Django, Express.
 - **S* Tiebreaking** (2+ passing): generates edge-case inputs, runs both candidates, majority wins
 - **Lens Selection** (1 passing or fallback): sort by C(x) energy, lowest wins
 
@@ -534,8 +538,12 @@ graph LR
         JS["JavaScript\nNode.js 20"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
+        Java["Java 21\njavac + java -cp"]
+        Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
         C["C / C++\ngcc/g++ -Wall"]
+        Ruby["Ruby\nruby -c + run"]
+        PHP["PHP\nphp -l + run"]
         Bash["Bash\nbash -n + run"]
     end
 
@@ -549,7 +557,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `rs` (Rust), `c++` (C++), `sh`/`shell` (Bash). Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
+Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `rb` (Ruby), `php` (PHP), `sh`/`shell` (Bash). Common CLI tools are baked into the image (`git`, `sqlite3`, `jq`, `patch`, `zip`/`unzip`, `xz`, `curl`) plus binary-inspection tools (`strings`, `objdump`, `readelf`, `nm` via binutils, and `file`, `xxd`) — the container is non-root on a read-only base, so anything a task shells out to must be preinstalled; nothing can be apt-installed at runtime. `read_file` on a binary returns a pointer to these tools rather than raw bytes. Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
 
 ---
 

@@ -2,6 +2,132 @@
 
 > This changelog is maintained as a best-effort summary; for line-level detail and any gaps, see the commit history (`git log`) or the GitHub PR list.
 
+## [Unreleased]
+
+### Code-review hardening of the #147 / TB2 series (2026-07-20)
+An xhigh review of the unpromoted series found 15 correctness defects, all fixed:
+the structural resolver now tracks locally-bound names (params, loop/with
+targets, assignments) so it no longer false-rejects valid edits or vetoes valid
+candidates; the write_file iteration fast-path and the text-exit path got the
+structural / verification / completion-claim gates they were missing; the
+structural gate excludes the edited file's stale pre-edit content; the read cap
+floor no longer exceeds a small slot's budget and a truncated read records only
+what was shown (correct dedup + EndLine); UTF-16 BOM files read as text; the
+command-not-found and inline-script steers, the expected-output gate, the
+active-iteration filename match, and the write fingerprint were all de-noised
+against false positives.
+
+### Structural gate on the edit path (#147, 2026-07-19)
+- An `ast_edit`/`edit_file` that introduced an unresolved direct call — e.g.
+  `render_template` while the file imported only `render_template_string` —
+  parsed fine, passed V3 verification, and landed as verified; every request
+  then 500'd (NameError). The in-pipeline structural veto was gated off when the
+  edit sent no `project_context`, and `ast_edit` had no gate at all.
+- Fixes: the V3 structural veto now runs whenever candidates exist (not only
+  when project files are present), resolving against the candidate's own
+  imports; a new `/internal/structural_check` endpoint exposes the resolver;
+  and a proxy-side structural gate on both edit paths refuses a write that
+  *introduces* an unresolved direct call (healthy→broken, matching the syntax
+  gate — a pre-existing unresolved name mid-repair is allowed). Python-only,
+  fail-open when v3-service is unreachable.
+
+### Agent-loop: commit the deliverable + read-size safety (TB2 rounds 5-6, 2026-07-19)
+- **Expected-output gate**: parse the prompt for the file the task asks the
+  model to produce ("save your solution in X", "the file Z must exist") and
+  check it against disk before allowing done/text exit — a partial artifact or
+  exploration-without-committing satisfies the generic action gate while the
+  named deliverable is still missing. Bounces naming the specific file.
+- **Loop-stop output-rescue**: the repeat/error breakers steer toward the named
+  deliverable once before hard-stopping (many hard tasks loop on run_command
+  and never reach the done/text exit where the gate lives).
+- **read_file byte cap**: a single read is capped at half the per-slot context
+  (worst-case ~1 token/char) so one huge read can't overflow the window — a
+  model that gunzipped a data file and read it whole hit 2.26M tokens and a hard
+  context-overflow 400 the force-trim retry couldn't fix. Unconditional (a line
+  limit doesn't bound bytes) and context-derived. Binary reads already return a
+  tool pointer instead of bytes.
+
+### Agent-loop: stop killing iteration (Terminal-Bench 2.0 round 2, 2026-07-19)
+Re-analysis of a 20-task round found that nearly every "failure" was a stopping
+condition firing on *productive* work, not the model reaching its limit (turns
+are uncapped). Fixes:
+- **Repetition detector distinguishes iteration from reassertion.** `write_file`
+  repetition is now keyed on path + a whitespace-stripped content fingerprint:
+  rewriting a file with materially different content (fixing successive compiler
+  errors) is iteration and no longer counts as a loop; reasserting the same draft
+  still does.
+- **Steer before kill.** The repetition breaker injects a corrective note and
+  continues on the first detection, ending the session only if the model repeats
+  after the nudge. The old immediate hard-stop (including the
+  "productive change → stop" path) terminated models one nudge from finishing.
+- **Broken-inline-script steer.** A `python -c` verification one-liner that fails
+  with a SyntaxError in its own `-c` argument now steers the model to move the
+  test into a `.py` file, instead of letting it re-run the unparseable command
+  into the breaker with a possibly-correct solution on disk.
+- **Text-exit action gate.** The `text` response path is gated the same way
+  `done` is: on an action-intent prompt with no productive change, it bounces
+  instead of letting the model narrate its intent and quit having done nothing.
+- **Binary-file read guard.** `read_file` on a binary (a NUL byte in the head)
+  no longer returns garbage bytes — it returns a directed pointer to the right
+  tools (`strings`/`readelf`/`objdump`/`nm`/`file`/`xxd`), which the model
+  otherwise never reached for (it read a compiled ELF as text and gave up).
+  `file` and `xxd` added to the sandbox image (binutils already rode in with gcc).
+- **Fast-path writes during active iteration.** Once the model has written a
+  file and just saw it fail a run, the next write is a targeted fix — it now
+  skips the V3 pipeline (still syntax-gated) and writes directly, instead of
+  paying V3's multi-minute per-call latency (which on a mid-debug file often
+  "completes without result" anyway). This unthrottles edit-test-fix loops from
+  ~5 cycles in 25 min to run-speed. V3 still owns the first write of each file.
+
+### Agent-loop hardening from the Terminal-Bench 2.0 dogfood round (2026-07-18)
+- **`atlas doctor` workspace-mount check** — new `workspace_mounts` check fails
+  loudly when the proxy and sandbox bind different host directories as
+  `/workspace` (a silent split that sends file tools and `run_command` to
+  different filesystems while every `/health` stays green). New
+  TROUBLESHOOTING entry documents the symptom and fix (`ATLAS_PROJECT_DIR` +
+  recreate both containers together).
+- **Sandbox image: common CLI tools baked in** — `git`, `sqlite3`, `jq`,
+  `patch`, `zip`, `xz-utils`. The sandbox is non-root on a read-only base, so
+  absent binaries can never be installed at runtime; `git clone` and
+  `sqlite3 .recover` both dead-ended on "command not found".
+- **Missing-command steer** — `command not found` shell errors now get a
+  directed [system note] stating that system packages cannot be installed in
+  the sandbox and pointing at pip-installable equivalents or the preinstalled
+  toolchains, instead of the model re-running into the repetition breaker.
+- **Conversation-trim correctness** — the token budget now counts the pinned
+  user instruction and pinned file content (previously re-injected without
+  being counted) and reserves proportional tokenizer slack (`slot/8`);
+  a llama-server over-context 400 force-trims to the minimum window and
+  retries once instead of killing the session.
+- **Sandbox tmpfs sizing is env-tunable** — `ATLAS_SANDBOX_TMP_SIZE` (2G),
+  `ATLAS_SANDBOX_PIP_SIZE` (1G), `ATLAS_SANDBOX_CACHE_SIZE` (512M); the old
+  fixed 256M `~/.local` overflowed on `pip install pandas pyarrow`.
+
+### V3.2 — RPG-style architecture-first planning (#120, experimental, opt-in)
+- New `ATLAS_RPG_PLANNING` flag (default **off**) enables repository-level,
+  plan-then-fill planning ahead of the existing problem-level PlanSearch:
+  - **Wavelet substrate** (`v3-service/wavelet/`) — a faithful, dependency-free
+    Python port of [wavescope-mcp](https://github.com/yogthos/wavescope-mcp)
+    (Ricker CWT, structural signal, multi-resolution bands, project decomposition,
+    peak-diff). Numeric parity with upstream is golden-tested.
+  - **Repository Planning Graph** (`v3-service/rpg.py`, [arXiv:2509.16198](https://arxiv.org/abs/2509.16198)) —
+    two-stage construction (proposal capability tree → implementation files +
+    signatures + data-flow edges), graph validation/scoring, and a topological
+    projection to the existing flat `Plan` so the agent loop is unchanged. The
+    proposal stage is seeded with the wavelet coarse band on existing repos.
+  - **Graph-guided generation** — each node's planned interface (signatures,
+    edges) threads into its `/v3/generate` call (`proxy/rpg.go`), so the existing
+    PlanSearch ([arXiv:2409.03733](https://arxiv.org/abs/2409.03733)) fills a node
+    whose architecture is already pinned.
+  - **Structural verification + drift** — the candidate veto now rejects code
+    that doesn't realize its planned signatures; post-write drift detection
+    surfaces the affected downstream subgraph for re-planning.
+  - **Offline metrics** — `v3-service/rpg_eval.py` scores RPG artifacts for CI /
+    benchmark summaries.
+  - Strictly additive: with the flag off, planning and generation are unchanged.
+  - Design + phased status: `docs/reports/RPG_WAVELET_PLANNING_V3_2.md`. Credit
+    idea + framing to Dmitri Sotnikov (@yogthos), author of wavescope-mcp.
+
 ## [3.1.3] - 2026-07-06 — Maia
 
 ### Upgrade, rollback, and diagnostics
